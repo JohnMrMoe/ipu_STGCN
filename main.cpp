@@ -1,5 +1,3 @@
-
-
 #include <vector>
 #include <string.h>
 #include <stdio.h>
@@ -9,6 +7,7 @@
 #include "util/Matrices.cpp"
 #include "util/util.hpp"
 #include "util/ipu_interface.hpp"
+#include "time/time_run.cpp"
 
 #include "data/data_utility.hpp"
 
@@ -151,7 +150,8 @@ int main(int argc, char const *argv[]) {
 
   double ms = time_run(engine, "STGCN");
 
-  size_t runs = 101;
+  size_t runs = 5; // should be an odd number
+  if (runs%2==0) runs++;
 
   double * times = (double *) malloc(sizeof(double) * runs);
   double total;
@@ -182,10 +182,10 @@ int main(int argc, char const *argv[]) {
 
   sort(times, times+runs);
 
-  cout << " |\tMedian:  " << times[50] << timeunit << "\n";
+  cout << " |\tMedian:  " << times[(runs - (runs%2))/2] << timeunit << "\n";
   cout << " |\tAverage: " << total/runs << timeunit << "\n";
   cout << " |\tMinimum: " << times[0] << timeunit << "\n";
-  cout << " |\tMaximum: " << times[100] << timeunit << "\n";
+  cout << " |\tMaximum: " << times[runs-1] << timeunit << "\n";
   cout << " +-----------------------------------------------------------\n";
 
 

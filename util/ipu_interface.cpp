@@ -58,15 +58,17 @@ IPU_Interface::IPU_Interface() : tensor_rq("log/tensor_requests.txt", "Tensor Re
 
   // get the things
   #ifdef _IRL_IPU
-    DevceManager manager = DeviceManager::createDeviceManager();
+    DeviceManager manager = DeviceManager::createDeviceManager();
 
     // attempt to attach to ipu
     bool success = false;
+    size_t skips = 2;
 
-    for (auto &hwDevice : manger.getDevices(poplar::TargetType::IPU, 1)) {
+    for (auto &hwDevice : manager.getDevices(poplar::TargetType::IPU, 1)) {
+      if (skips--==0) continue;
       device = std::move(hwDevice);
       std::cerr << "Trying to attach to IPU " << device.getId() << "\n";
-      if ((sucess = device.attach())) {
+      if ((success = device.attach())) {
         std::cerr << "Attached to IPU " << device.getId() << "\n";
         break;
       }
