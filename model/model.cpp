@@ -38,8 +38,8 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   vector<size_t> tmp_sections = {shape[0], n_his, shape[2], largest_channel};
   Tensor block_t1 = ipu.getVariable(g, "layer0", tmp_sections);
   Tensor block_t2 = ipu.getVariable(g, "layer1", tmp_sections);
-  Tensor layer_t1 = ipu.getVariable(g, "block0", tmp_sections);
-  Tensor layer_t2 = ipu.getVariable(g, "block1", tmp_sections);
+  // Tensor layer_t1 = ipu.getVariable(g, "block0", tmp_sections);
+  // Tensor layer_t2 = ipu.getVariable(g, "block1", tmp_sections);
 
   Tensor next_in = x;
 
@@ -63,7 +63,7 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
     return model;
   }
   // y = [batch_size, 1, n_route, 1]
-  Tensor y = ipu.getAlternatingSpace("block", {next_in.shape()[0], 1, next_in.shape()[2], 1});
+  Tensor y = ipu.getVariable(g, "block", {next_in.shape()[0], 1, next_in.shape()[2], 1}, 0);
   y = output_layer(ipu, g, next_in, y, Ko, model, "output_layer");
 
   model.add(PrintTensor("Y :", y.reshape({y.shape()[0], y.shape()[2]}).slice({0, 0}, {6, 6}) ));

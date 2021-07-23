@@ -24,8 +24,12 @@ Tensor verify_same_2(Graph &g, Tensor &res, Tensor &inp, Sequence &seq, string l
   Tensor delta = popops::sub(g, res, inp, seq);
   Tensor delta_min = popops::reduce(g, delta, vector<size_t>{0, 1, 2, 3}, popops::ReduceParams(popops::Operation::MIN), seq);
   Tensor delta_max = popops::reduce(g, delta, vector<size_t>{0, 1, 2, 3}, popops::ReduceParams(popops::Operation::MAX), seq);
-  seq.add(PrintTensor("\t\t" + label + " verified abs.MIN(DELTA)", delta_min));
-  seq.add(PrintTensor("\t\t" + label + " verified abs.MAX(DELTA)", delta_max));
+
+  Tensor pair = concat(delta_min.reshape({1}), delta_max.reshape({1}));
+
+  seq.add(PrintTensor("\t\t" + label + " error range:", pair));
+
+
 
   for (size_t i = 0; i < delta.shape().size(); i++) {
     #ifndef _DEEP_VERIFICATION

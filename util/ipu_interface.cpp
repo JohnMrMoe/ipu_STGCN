@@ -469,7 +469,7 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
       case (AUTOFL_TENSOR):
         break;
       default:
-        printf("\tUNDEFINED WRITINg: %d", t_type);
+        printf("\tUNDEFINED WRITING: %d", t_type);
         break;
     }
   }
@@ -486,7 +486,10 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
 Program IPU_Interface::notification(Graph &g, string notification) {
   Tensor t = getVariable_OLD(g, "Notification", {1}, 0);
   Tensor p = getVariable_OLD(g, "pluss", {1});
-  Sequence note(PrintTensor(notification, t));
+  Sequence note;
+  #ifdef   _NOTIFY
+    note.add(PrintTensor(notification, t));
+  #endif //_NOTIFY
   popops::addInPlace(g, t, p, note); // increment
   return note;
 }

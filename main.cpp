@@ -88,12 +88,7 @@ int main(int argc, char const *argv[]) {
 
   std::cout << "Sizeof(Training)   [B]:    " << (dataset.train.size * sizeof(float)) << '\n';
   std::cout << "Sizeof(Validation) [B]:  " << (dataset.valid.size * sizeof(float)) << '\n';
-  std::cout << "Sizeof(Testing)    [B]:     " << (dataset.test.size * sizeof(float)) << '\n';
-
-  std::cout << "\n\n\n\n\n" << '\n';
-  //std::cout << "Train nnz: " << dataset.train.nnz_percent() << '\n';
-  //std::cout << "Valid nnz: " << dataset.valid.nnz_percent() << '\n';
-  //std::cout << "Test nnz : " << dataset.test.nnz_percent() << '\n';
+  std::cout << "Sizeof(Testing)    [B]:     " << (dataset.test.size * sizeof(float)) << '\n' << '\n';
 
   // CREATE
   IPU_Interface ipu;
@@ -144,13 +139,11 @@ int main(int argc, char const *argv[]) {
   Tensor train_loss = get<1>(assets);
   Tensor pred_y     = get<2>(assets);
 
-  Sequence modelp(PrintTensor("LK", graph_kernel.slice({0, 0}, {9, 9})), model);
-
-  Engine engine = ipu.finalize_and_run(graph, modelp, false);
+  Engine engine = ipu.finalize_and_run(graph, model, false);
 
   double ms = time_run(engine, "STGCN");
 
-  size_t runs = 5; // should be an odd number
+  size_t runs = 1000; // should be an odd number
   if (runs%2==0) runs++;
 
   double * times = (double *) malloc(sizeof(double) * runs);

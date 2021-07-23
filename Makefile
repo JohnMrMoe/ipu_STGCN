@@ -7,6 +7,7 @@ DRND			:= -D_DERANDOMIZE
 VERI      := -D_VERIFICATION
 POPLAR	  := -lpoplar -lpoputil -lpopops -lpoplin -lpopsparse -lpopnn -lpoprand -fopenmp
 POPVISION := POPLAR_ENGINE_OPTIONS='{"autoReport.all":"true", "autoReport.directory":"./report"}'
+BSZ				:= --batch_size 30
 # POP :=
 
 C_FILES = $(wildcard util/*.cpp) $(wildcard data/*.cpp) $(wildcard model/*.cpp)
@@ -23,16 +24,16 @@ stgcn_ipu: clean $(H_FILES)
 	$(CC) main.cpp $(C_FILES) -o $@ $(FLAGS) $(IPU) $(POPLAR) $(DRND) $(VERI)
 
 run: import
-	./stgcn --batch_size 30
+	./stgcn $(BSZ)
 vrun: import
-	valgrind ./stgcn --batch_size 30
+	valgrind ./stgcn $(BSZ)
 clean_run: clean stgcn run
 clean_vrun: clean stgcn vrun
 
 run_ipu: import
-	./stgcn_ipu --batch_size 30
+	./stgcn_ipu $(BSZ)
 vrun_ipu: import
-	valgrind ./stgcn_ipu --batch_size 30
+	valgrind ./stgcn_ipu $(BSZ)
 clean_ipu_run: clean stgcn_ipu run_ipu
 clean_ipu_vrun: clean stgcn_ipu vrun_ipu
 

@@ -158,8 +158,6 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   //
   popops::divInPlace(g, sigma, divn, norm_layer);
 
-  norm_layer.add(PrintTensor("DIVN", divn));
-
   ipu.addVariable(scope + "_avg", mu);
   ipu.addVariable(scope + "_inv-std-dev", sigma);
 
@@ -415,7 +413,8 @@ Tensor st_conv_block      (IPU_Interface &ipu, Graph &g, Tensor &x, size_t Ks, s
 
   #ifdef _DERANDOMIZE
     cout << "\t\tDerandomized postdrop " << scope << "\n";
-    drop = derandomize(ipu, g, drop, scope+"[postdrop]");
+    Tensor corr = derandomize(ipu, g, drop, scope+"[postdrop]");
+    exe_st_conv_block.add(Copy(corr, drop));
   #endif
 
   layer_exit_note(ipu, "ST_CONV_BOCK", scope);
@@ -458,17 +457,18 @@ Tensor output_layer       (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &out,
 
 
 
+  verification_pass(ipu, g, x, scope+"[F-T0]", seq);
   x2  = temporal_conv_layer(ipu, g, x,  x2, T, channel, channel, seq, scope+"_in", act_func);
-  // verification_pass(ipu, g, x2, scope+"[F-T1]", seq);
+  verification_pass(ipu, g, x2, scope+"[F-T1]", seq);
 
   x1  = layer_norm         (ipu, g, x2, x1, seq, "layer_norm_" + scope);
-  verification_pass(ipu, g, x1, scope+"[F-LN]", seq);
+  // verification_pass(ipu, g, x1, scope+"[F-LN]", seq);
 
   x2  = temporal_conv_layer(ipu, g, x1, x2, 1, channel, channel, seq, scope+"_out", "sigmoid");
-  verification_pass(ipu, g, x2, scope+"[F-T2]", seq);
+  // verification_pass(ipu, g, x2, scope+"[F-T2]", seq);
 
   out = fully_con_layer    (ipu, g, x2, out, n, channel, seq, scope);
-  verification_pass(ipu, g, out, scope+"[F-OUT]", seq);
+  // verification_pass(ipu, g, out, scope+"[F-OUT]", seq);
 
   layer_exit_note(ipu, "OUTPUT_LAYER", scope);
   return out;
