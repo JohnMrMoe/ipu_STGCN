@@ -91,7 +91,6 @@ Tensor gconv              (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   gconv_layer.add(Copy(x_final, dst));
   // FINISH METHOD
 
-
   layer_exit_note(ipu, "GCONV", scope);
   seq.add(gconv_layer);
   return dst;

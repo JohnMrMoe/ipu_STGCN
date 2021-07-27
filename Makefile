@@ -18,10 +18,10 @@ H_FILES = $(wildcard util/*.hpp) $(wildcard data/*.hpp) $(wildcard model/*.hpp)
 
 
 stgcn: clean $(H_FILES)
-	$(CC) main.cpp $(C_FILES) -o $@ $(FLAGS) $(POPLAR) $(DRND) $(VERI)
+	$(CC) main.cpp $(C_FILES) -o $@ $(FLAGS) $(POPLAR)
 
 stgcn_ipu: clean $(H_FILES)
-	$(CC) main.cpp $(C_FILES) -o $@ $(FLAGS) $(IPU) $(POPLAR) $(DRND) $(VERI)
+	$(CC) main.cpp $(C_FILES) -o $@ $(FLAGS) $(IPU) $(POPLAR)
 
 run: import
 	./stgcn $(BSZ)
