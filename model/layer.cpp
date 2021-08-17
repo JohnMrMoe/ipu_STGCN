@@ -66,9 +66,6 @@ Tensor gconv              (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   size_t n = kernel.shape()[0];
 
   // x_tmp = tf.reshape(tf.transpose(x, [0, 2, 1]), [-1, n])
-  ComputeSet cs = g.addComputeSet("transpose");
-  // Tensor t_x = popops::rearrange::partialTranspose(g, x, cs);
-  // gconv_layer.add(Execute(cs));
   Tensor t_x = x.dimShuffle({0, 2, 1});
   Tensor x_tmp = t_x.reshape(vector<size_t>{minus_one_val(t_x.shape(), vector<size_t>{n}), n});
 
@@ -221,7 +218,6 @@ Tensor temporal_conv_layer(IPU_Interface &ipu, Graph &g, Tensor &src, Tensor &ds
      std::vector<size_t>{x_input.shape()[0], T, x_input.shape()[2], x_input.shape()[3]}
   );
 
-  verification_pass(ipu, g, x_input, scope + "[x_i]["+act_func+"]", tconv_layer);
 
   Tensor wt, bt, x_conv, filter;
   // ACT FUNC DEPENDENT CODE:
@@ -238,9 +234,6 @@ Tensor temporal_conv_layer(IPU_Interface &ipu, Graph &g, Tensor &src, Tensor &ds
 
 
     Tensor x_conv = conv2d(ipu, g, src, filter_shape, s_wt_token, s_bt_token, output, tconv_layer, true);
-
-
-    verification_pass(ipu, g, x_conv, scope + "[x_conv]", tconv_layer);
 
     // bt = ipu.getVariable(g, "bt", std::vector<std::size_t>{2*c_out}, 0);
     // popops::addInPlace (g, x_conv, bt, tconv_layer);
@@ -307,8 +300,6 @@ Tensor spatio_conv_layer  (IPU_Interface &ipu, Graph &g, Tensor &src, Tensor &ds
   size_t n = shape[2];
 
   Sequence spatio_conv_layer(ipu.notification(g, "Spatio Temporal Layer {"+scope+"}"));
-
-  verification_pass(ipu, g, src, scope + "[SIN]", spatio_conv_layer);
 
   Tensor x_input;
 
@@ -387,15 +378,13 @@ Tensor st_conv_block      (IPU_Interface &ipu, Graph &g, Tensor &x, size_t Ks, s
 
   Sequence exe_st_conv_block;
 
-  exe_st_conv_block.add(ipu.notification(g, "ST-CONV-BLOCK ["+scope+"]{"+to_string(channels[0])+","+to_string(channels[1])+","+to_string(channels[2])+"}"));
+  // exe_st_conv_block.add(ipu.notification(g, "ST-CONV-BLOCK ["+scope+"]{"+to_string(channels[0])+","+to_string(channels[1])+","+to_string(channels[2])+"}"));
 
   t_out_1 = temporal_conv_layer(ipu, g, x,    t_out_1, Kt, c_si, c_t, exe_st_conv_block, "stn_block_" + scope + "_in", act_func);
   sout    = spatio_conv_layer  (ipu, g, t_out_1, sout, Ks, c_t, c_t,  exe_st_conv_block, "stn_block_" + scope + "_spt");
   t_out_2 = temporal_conv_layer(ipu, g, sout, t_out_2, Kt, c_t, c_oo, exe_st_conv_block, "stn_block_" + scope + "_out");
-
-
   t_out_2 = layer_norm         (ipu, g, t_out_2, t_out_2,             exe_st_conv_block, "layer_norm_" + scope);
-  verification_pass(ipu, g, t_out_2, scope+"[predrop]", exe_st_conv_block);
+  // verification_pass(ipu, g, t_out_2, scope+"[predrop]", exe_st_conv_block);
 
 
 
@@ -425,7 +414,7 @@ Tensor fully_con_layer    (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &out,
 
   vector<size_t> kernel_shape = {1, 1, channel, 1};
 
-  Sequence full_con_layer(ipu.notification(g, "Fully Con Layer {"+scope+"}"));
+  Sequence full_con_layer;
 
   out = conv2d_SAME(ipu, g, x, kernel_shape, scope + "=w", "", out, full_con_layer, false);
 
@@ -456,9 +445,9 @@ Tensor output_layer       (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &out,
 
 
 
-  verification_pass(ipu, g, x, scope+"[F-T0]", seq);
+  // verification_pass(ipu, g, x, scope+"[F-T0]", seq);
   x2  = temporal_conv_layer(ipu, g, x,  x2, T, channel, channel, seq, scope+"_in", act_func);
-  verification_pass(ipu, g, x2, scope+"[F-T1]", seq);
+  // verification_pass(ipu, g, x2, scope+"[F-T1]", seq);
 
   x1  = layer_norm         (ipu, g, x2, x1, seq, "layer_norm_" + scope);
   // verification_pass(ipu, g, x1, scope+"[F-LN]", seq);

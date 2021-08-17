@@ -27,23 +27,19 @@
 
   Tensor keep_prob = ipu.getVariable(g, (string) "keep_prob", shape_keep_prob);
 
-  Sequence model;
-  model.add(build_model(x, args.n_his, args.ks, args.kt, blocks, ipu, g));
+  Sequence model = build_model(x, args.n_his, args.ks, args.kt, blocks, ipu, g);
 
 
   Tensor train_loss = ipu.getVariable_OLD(g, "copy_loss");
   Tensor pred = ipu.getVariable_OLD(g, "y_pred");
 
-  ipu.shape_display(train_loss.shape(), "train_loss");
-  ipu.shape_display(pred.shape(), "pred");
+  // model.add(PrintTensor("Input     ", x.flatten().slice({0}, {6})));
+  // model.add(PrintTensor("Train_loss", train_loss.flatten().slice({0}, {6})));
 
-  model.add(PrintTensor("Input     ", x.flatten().slice({0}, {6})));
-  model.add(PrintTensor("Train_loss", train_loss.flatten().slice({0}, {6})));
-
-  pred = pred.reshape({pred.shape()[0], pred.shape()[2]});
-
-  std::cout << "..." << ipu.shape_display(pred, "", "") << '\n';
-  model.add(PrintTensor("Prediction", pred.slice({0, 0}, {6, 6})));
+  // pred = pred.reshape({pred.shape()[0], pred.shape()[2]});
+  //
+  // std::cout << "..." << ipu.shape_display(pred, "", "") << '\n';
+  // model.add(PrintTensor("Prediction", pred.slice({0, 0}, {6, 6})));
 
   return tuple<Program, Tensor, Tensor>(model, train_loss, pred);
 

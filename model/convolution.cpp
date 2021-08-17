@@ -159,9 +159,9 @@ Tensor conv2d_SAME(IPU_Interface &ipu,
                  bool biased
               )
 {
-  layer_entry_note(ipu, "CONV SAME", filter_scope);
   size_t cnvg = 1;
   size_t ch = input.shape()[3];
+
   // input   = [B x H x W x inChans]
   // input_t = [B x inChans x H x W],
   // filter_shape = [filter_height, filter_width, in_channels, out_channels]
@@ -208,7 +208,7 @@ Tensor conv2d_SAME(IPU_Interface &ipu,
   Tensor refilter = filter.reshape({filter_shape[3], filter_shape[2], filter_shape[0], filter_shape[1]}).dimShuffle({2, 3, 1, 0});
   ipu.addVariable(filter_scope, refilter, 4, kernel.permanent_pointer);
 
-  Tensor output_t = poplin::convolution(g, input_t, filter, cp, false, seq);
+  Tensor output_t = poplin::convolution(g, input_t, filter, cp, false, seq, DebugContext(filter_scope + ":<CONV>"));
 
 
   if (biased) {

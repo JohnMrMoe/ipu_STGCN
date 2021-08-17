@@ -10,9 +10,10 @@ double time_run(Engine &engine, string label="--unlabeled run--", size_t prog=0)
   engine.run(prog, label);
   auto run_end = std::chrono::high_resolution_clock::now();
 
-  // double ms = std::chrono::duration_cast<std::chrono::nanoseconds>(run_end - run_start).count() / 1e3;
+  // double microsends = std::chrono::duration_cast<std::chrono::nanoseconds>(run_end - run_start).count() / 1e3;
   // old ms: std::chrono::duration<double, std::milli> ms = run_end - run_start;
-  double ms = std::chrono::duration_cast<std::chrono::nanoseconds>(run_end - run_start).count() / 1e6;
+  double ns = std::chrono::duration_cast<std::chrono::nanoseconds>(run_end - run_start).count();
+  double  ms = ns / 1e6;
 
   return ms;
 }

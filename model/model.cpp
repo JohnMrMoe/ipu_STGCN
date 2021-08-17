@@ -66,7 +66,7 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   Tensor y = ipu.getVariable(g, "block", {next_in.shape()[0], 1, next_in.shape()[2], 1}, 0);
   y = output_layer(ipu, g, next_in, y, Ko, model, "output_layer");
 
-  model.add(PrintTensor("Y :", y.reshape({y.shape()[0], y.shape()[2]}).slice({0, 0}, {6, 6}) ));
+  // model.add(PrintTensor("Y :", y.reshape({y.shape()[0], y.shape()[2]}).slice({0, 0}, {6, 6}) ));
 
 
   Sequence loss_prog;
@@ -94,7 +94,7 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   // VERIFIVICATION
   verification_pass(ipu, g, y, "STGCN_OUT", model);
 
-  model.add(loss_prog);
+  //model.add(loss_prog);
 
   return model;
 }

@@ -31,7 +31,7 @@ clean_run: clean stgcn run
 clean_vrun: clean stgcn vrun
 
 run_ipu: import
-	./stgcn_ipu $(BSZ)
+	$(POPVISION) ./stgcn_ipu $(BSZ)
 vrun_ipu: import
 	valgrind ./stgcn_ipu $(BSZ)
 clean_ipu_run: clean stgcn_ipu run_ipu

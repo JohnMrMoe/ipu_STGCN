@@ -62,10 +62,11 @@ IPU_Interface::IPU_Interface() : tensor_rq("log/tensor_requests.txt", "Tensor Re
 
     // attempt to attach to ipu
     bool success = false;
-    size_t skips = 2;
+    size_t skips = 4;
+    size_t ipus = 1;
 
-    for (auto &hwDevice : manager.getDevices(poplar::TargetType::IPU, 1)) {
-      if (skips--==0) continue;
+    for (auto &hwDevice : manager.getDevices(poplar::TargetType::IPU, ipus)) {
+      if (skips) {skips--; continue;}
       device = std::move(hwDevice);
       std::cerr << "Trying to attach to IPU " << device.getId() << "\n";
       if ((success = device.attach())) {
@@ -457,12 +458,12 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
         // free matrix
         free(glorot);
         break;
-      case (FEEDIN_TENSOR):
-        handle = StringRef(label);
-                    //g.createHostWrite(label, tensor);
-        engine.writeTensor(label, &pointr[0], &pointr[size_X]);
-        break;
-      case (FILEFD_TENSOR):
+      case (FEEDIN_TENSOR):case (FILEFD_TENSOR):
+        // handle = StringRef(label);
+        // engine.writeTensor(label, &pointr[0], &pointr[size_X]);
+        // break;
+        //
+      //case (FILEFD_TENSOR):
         handle = StringRef(label);
         engine.writeTensor(label, &pointr[0], &pointr[size_X]);
         break;
