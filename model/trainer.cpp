@@ -31,7 +31,7 @@
 
 
   Tensor train_loss = ipu.getVariable_OLD(g, "copy_loss");
-  Tensor pred = ipu.getVariable_OLD(g, "y_pred");
+  // Tensor pred = ipu.getVariable_OLD(g, "y_pred");
 
   // model.add(PrintTensor("Input     ", x.flatten().slice({0}, {6})));
   // model.add(PrintTensor("Train_loss", train_loss.flatten().slice({0}, {6})));
@@ -41,6 +41,6 @@
   // std::cout << "..." << ipu.shape_display(pred, "", "") << '\n';
   // model.add(PrintTensor("Prediction", pred.slice({0, 0}, {6, 6})));
 
-  return tuple<Program, Tensor, Tensor>(model, train_loss, pred);
+  return tuple<Program, Tensor, Tensor>(model, train_loss, train_loss);
 
 }

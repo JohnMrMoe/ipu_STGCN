@@ -22,6 +22,11 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   std::vector<std::size_t> shape_end = shape;
   shape_end[1] = n_his;
 
+  // we use two other places too
+  Tensor two = (Tensor) g.addConstant<float>(FLOAT, {1}, {2.0});
+  g.setTileMapping(two, 0);
+  ipu.addVariable("two", two);
+
 
   Sequence sq(ipu.notification(g, "VERIFICATION NOTIFICATION DELIBERATION " + ipu.shape_display(shape, "") + ", " + to_string(n_his)));
 
@@ -71,7 +76,7 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
 
   Sequence loss_prog;
 
-  Tensor single_pred = ipu.getVariable(g, "y_pred", {y.shape()[0], 1, y.shape()[2], y.shape()[3]}, 0);
+  // Tensor single_pred = ipu.getVariable(g, "y_pred", {y.shape()[0], 1, y.shape()[2], y.shape()[3]}, 0);
   Tensor copy_loss  = ipu.getVariable(g, "copy_loss", {input.shape()[0], 1, input.shape()[2], input.shape()[3]}, 0);
   Tensor train_loss = ipu.getVariable(g, "train_loss", y.shape(), 0);
 
@@ -81,15 +86,13 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   popops::minInPlace(g, copy_loss , input.slice({0, n_his, 0, 0}, {input.shape()[0], n_his+1, input.shape()[2], input.shape()[3]}), loss_prog);
   popops::minInPlace(g, train_loss, input.slice({0, n_his, 0, 0}, {input.shape()[0], n_his+1, input.shape()[2], input.shape()[3]}), loss_prog);
 
-  Tensor two = (Tensor) g.addConstant<float>(FLOAT, {1}, {2.0});
-  g.setTileMapping(two, 0);
   // L2 Loss:
   popops::squareInPlace(g, copy_loss, loss_prog);
   popops::squareInPlace(g, train_loss, loss_prog);
   popops::divInPlace(g, copy_loss,  two, loss_prog);
   popops::divInPlace(g, train_loss, two, loss_prog);
 
-  model.add(Copy(y.slice({0, 0, 0, 0}, {y.shape()[0], 1, y.shape()[2], y.shape()[3]}), single_pred));
+  // model.add(Copy(y.slice({0, 0, 0, 0}, {y.shape()[0], 1, y.shape()[2], y.shape()[3]}), single_pred));
 
   // VERIFIVICATION
   verification_pass(ipu, g, y, "STGCN_OUT", model);

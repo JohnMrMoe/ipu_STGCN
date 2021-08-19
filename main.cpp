@@ -143,7 +143,7 @@ int main(int argc, char const *argv[]) {
 
   double ms = time_run(engine, "STGCN");
 
-  size_t runs = 10; // should be an odd number
+  size_t runs = 50; // should be an odd number
   if (runs%2==0) runs++;
 
   double * times = (double *) malloc(sizeof(double) * runs);
@@ -155,32 +155,32 @@ int main(int argc, char const *argv[]) {
   // cin.ignore();
   // cout << "Executing " << runs << " runs.\n";
 
-  // for (size_t i = 0; i < runs; i++) {
-  //   times[i] = time_run(engine, "STGCN #" + to_string(i));
-  //   if (i%20==0) std::cout << "Run: " << (i<100?" ":"") << (i<10?" ":"") << i << '\n';
-  //   total += times[i];
-  // }
-  //
-  // size_t step = 5;
-  // cout << " +-----------------------------------------------------------\n";
-  // cout << " | TIMES:\n";
-  // cout << " |\tListing:\n";
-  // for (size_t i = 0; i < runs; i+=step) {
-  //   if (i+step>runs) {
-  //     cout << " |\t\t";
-  //     for (i=i; i < runs; i++) std::cout << times[i] << (i==runs-1?"\n":", ");
-  //   } else {
-  //     cout << " |\t\t" << times[i] << ", " << times[i+1] << ", " << times[i+2] << ", " << times[i+3] << ", " << times[i+4] << "\n";
-  //   }
-  // }
-  //
-  // sort(times, times+runs);
-  //
-  // cout << " |\tMedian:  " << times[(runs - (runs%2))/2] << timeunit << "\n";
-  // cout << " |\tAverage: " << total/runs << timeunit << "\n";
-  // cout << " |\tMinimum: " << times[0] << timeunit << "\n";
-  // cout << " |\tMaximum: " << times[runs-1] << timeunit << "\n";
-  // cout << " +-----------------------------------------------------------\n";
+  for (size_t i = 0; i < runs; i++) {
+    times[i] = time_run(engine, "STGCN #" + to_string(i));
+    if (i%10==0&&i) std::cout << "Run: " << (i<100?" ":"") << (i<10?" ":"") << i << '\n';
+    total += times[i];
+  }
+
+  size_t step = 5;
+  cout << " +-----------------------------------------------------------\n";
+  cout << " | TIMES:\n";
+  cout << " |\tListing:\n";
+  for (size_t i = 0; i < runs; i+=step) {
+    if (i+step>runs) {
+      cout << " |\t\t";
+      for (i=i; i < runs; i++) std::cout << times[i] << (i==runs-1?"\n":", ");
+    } else {
+      cout << " |\t\t" << times[i] << ", " << times[i+1] << ", " << times[i+2] << ", " << times[i+3] << ", " << times[i+4] << "\n";
+    }
+  }
+
+  sort(times, times+runs);
+
+  cout << " |\tMedian:  " << times[(runs - (runs%2))/2] << timeunit << "\n";
+  cout << " |\tAverage: " << total/runs << timeunit << "\n";
+  cout << " |\tMinimum: " << times[0] << timeunit << "\n";
+  cout << " |\tMaximum: " << times[runs-1] << timeunit << "\n";
+  cout << " +-----------------------------------------------------------\n";
 
 
 

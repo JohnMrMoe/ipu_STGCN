@@ -88,6 +88,30 @@ Tensor gconv              (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   gconv_layer.add(Copy(x_final, dst));
   // FINISH METHOD
 
+  // Backward Pass
+  Sequence bwd;
+  Tensor re_x_fmul = dst.reshape(x_fmul.shape());
+
+  // get gradients over latter multiplication
+  Tensor deltaWeights  = poplin::matMul(g, x_rr.transpose(), re_x_fmul,   bwd, poplar::FLOAT);
+  Tensor bwError       = poplin::matMul(g, re_x_fmul, theta.transpose(), bwd, poplar::FLOAT);
+
+  // apply gradients
+  popops::addInPlace(g, theta, deltaWeights, bwd);
+
+  //some fucking flip flops
+  Tensor bwError_R  = bwError.reshape(x_rt.shape());
+
+  Tensor bwError_xms = bwError_R.dimShuffle({0, 2, 3, 1}).reshape(x_mul.shape());
+
+  // we DON't Change the kernel? I think, so we'll just leave it as is
+  bwError = poplin::matMul(g, bwError_xms, kernel.transpose(), bwd, poplar::FLOAT);
+
+  // final flips and flops
+  bwError = bwError.reshape(t_x.shape()).dimShuffle({0, 2, 1});
+  bwd.add(Copy(bwError, x));
+  // BW DONE`?
+
   layer_exit_note(ipu, "GCONV", scope);
   seq.add(gconv_layer);
   return dst;
@@ -108,12 +132,12 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   float  epsilon = .1;// 0.001, // epsilon?
 
   // PAIR:  avg,    std-dev
-  std::pair<Tensor, Tensor> moments = poplin::normStatistics(g,
-                                                     _NCHW,
-                                                     epsilon,
-                                                     norm_layer, // program
-                                                     true //unbiasedVarEstimate
-                                                   );
+  // std::pair<Tensor, Tensor> moments = poplin::normStatistics(g,
+  //                                                    _NCHW,
+  //                                                    epsilon,
+  //                                                    norm_layer, // program
+  //                                                    true //unbiasedVarEstimate
+  //                                                  );
 
   Tensor mu = popnn::pooling::pool(g,
                     popnn::pooling::PoolParams(
@@ -167,22 +191,136 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   ipu.addVariable("_1eminsix", _1eminsix);
 
   //Tensor norm = popops::sub(g, x, mu, norm_layer);
-  Tensor norm = xmmu;
+  Tensor norm = ipu.getVariable(g, scope + "xmmu", xmmu.shape());
+  norm_layer.add(Copy(xmmu, norm));
+
   ipu.addVariable(scope + "_norm", norm);
 
   // // Original interpreatation:
   popops::addInPlace (g, sigma, _1eminsix, norm_layer);
-  popops::sqrtInPlace(g, sigma, norm_layer);
+  Tensor sqrt_sigma = popops::sqrt(g, sigma, norm_layer);
 
-  popops::divInPlace(g, norm, sigma, norm_layer); // -- Problem
+  popops::divInPlace(g, norm, sqrt_sigma, norm_layer); // -- Problem
   popops::mulInPlace(g, norm, gamma, norm_layer);
   popops::addInPlace(g, norm, beta, norm_layer);
 
   norm_layer.add(Copy(norm, dst));
 
-  layer_exit_note(ipu, "LAYER_NORM", scope);
-  seq.add(norm_layer);
 
+  // Backward pass over this!
+    // with help from https://kratzert.github.io/2016/02/12/understanding-the-gradient-flow-through-the-batch-normalization-layer.html
+    // get the gradients?
+  Sequence bwd;
+
+  std::cout << "dst.shape = " << dst.shapeToString() << '\n';
+
+  popnn::pooling::PoolParams pooler(
+    popnn::PoolingType::SUM,
+    vector<size_t>{dst.shape()[2], dst.shape()[3]}, // field shape
+    vector<size_t>{dst.shape()[2], dst.shape()[3]}, // kernel shape
+    vector<unsigned>{1, 1},                        // stride
+    vector<int>{0, 0},    // pad
+    vector<int>{0, 0},    // pad
+    dst.shape()[1],     // channels
+    dst.shape()[0],     // batch size
+    poplar::FLOAT
+  );
+
+  cout << "Pool is complete!\n";
+
+  Tensor deltaBias = popnn::pooling::pool(g, pooler, dst, bwd);
+
+  cout << "m1: " << xmmu.transpose().shapeToString() << " X " << dst.shapeToString() << "\n";
+  cout << "m2: " << dst.shapeToString() << " X " << gamma.transpose().shapeToString() << "\n";
+
+  Tensor deltaWeights  = poplin::matMul(g, xmmu.transpose(), dst,   bwd, poplar::FLOAT);
+  Tensor bwError       = poplin::matMul(g, dst, gamma.transpose(), bwd, poplar::FLOAT);
+
+  std::cout << "\tHEY #" << '\n';
+
+    // Alt beta/gamma
+  popops::addInPlace(g, beta, deltaBias, bwd);
+  popops::addInPlace(g, gamma, deltaWeights, bwd);
+
+  std::cout << "\tHEY #" << '\n';
+    //
+  Tensor  one = g.addConstant<float>(poplar::FLOAT, {1}, { 1});
+  Tensor mone = g.addConstant<float>(poplar::FLOAT, {1}, {-1});
+  Tensor   p5 = g.addConstant<float>(poplar::FLOAT, {1}, {.5});
+  g.setTileMapping(one, 1471); // just map them to a tile, not trying to put all on zero here.
+  g.setTileMapping(mone, 1471);
+  g.setTileMapping(p5, 1471);
+  Tensor invSigma = popops::div(g, one, sqrt_sigma, bwd);
+  Tensor divar = poplin::matMul(g, bwError, xmmu, bwd, poplar::FLOAT);
+  Tensor dxmu1 = poplin::matMul(g, bwError, invSigma, bwd, poplar::FLOAT);
+
+  std::cout << "\tHEY #" << '\n';
+
+  // #step6 var=sigma
+  // dsqrtvar = -1. /(sqrtvar**2) * divar
+  Tensor dsqrtvar = popops::div(g, mone, sigma, bwd);
+  popops::mulInPlace(g, dsqrtvar, divar, bwd);
+
+  std::cout << "\tHEY #" << '\n';
+
+  // #step5
+  // dvar = 0.5 * 1. /np.sqrt(var+eps) * dsqrtvar
+  Tensor dvar = popops::div(g, p5, sqrt_sigma, bwd);
+  popops::mulInPlace(g, dvar, dsqrtvar, bwd);
+
+  // #step4
+  // dsq = 1. /N * np.ones((N,D)) * dvar
+  FeedinVector fv(dst.numElements()); fv.valfill(1. / (x.shape()[2] * x.shape()[3]));
+  Tensor flector = ipu.getVariable(g, "flector", dst.shape(), FEEDIN_TENSOR, fv.permanent_pointer);
+
+  Tensor dsq = popops::mul(g, flector, dvar, bwd);
+
+  // #step3
+  // dxmu2 = 2 * xmu * dsq
+  Tensor two = ipu.getVariable_OLD(g, "two");
+  popops::mulInPlace(g, xmmu, two, bwd);
+  popops::mulInPlace(g, xmmu, dsq, bwd);
+  Tensor dxmu2 = xmmu;
+
+  std::cout << "\tHEY #" << '\n';
+
+  // #step2
+  // dx1 = (dxmu1 + dxmu2)
+  // dmu = -1 * np.sum(dxmu1+dxmu2, axis=0)
+  popops::addInPlace(g, dxmu1, dxmu2, bwd);
+  Tensor dx1 = dxmu1;
+
+  Tensor dmu = popnn::pooling::pool(g,
+                    popnn::pooling::PoolParams(
+                     popnn::PoolingType::SUM,
+                     vector<size_t>{x.shape()[2], x.shape()[3]},
+                     vector<size_t>{x.shape()[2], x.shape()[3]},
+                     vector<unsigned>{1, 1},
+                     vector<int>{0, 0},
+                     vector<int>{0, 0},
+                     x.shape()[1],
+                     x.shape()[0],
+                     poplar::FLOAT
+                   ),
+                   dx1,
+                   bwd
+                 );
+  popops::mulInPlace(g, dmu, mone, bwd);
+
+  // #step1
+  // dx2 = 1. /N * np.ones((N,D)) * dmu
+  bwd.add(Copy(flector, dsq));
+  popops::mulInPlace(g, dsq, dmu, bwd);
+  Tensor dx2 = dsq;
+
+  // #step0
+  // dx = dx1 + dx2
+  bwd.add(Copy(dx1, x));
+  popops::addInPlace(g, x, dx2, bwd);
+
+  // end of backwards pass
+
+  seq.add(norm_layer);
   return dst;
   // return dst;
 }

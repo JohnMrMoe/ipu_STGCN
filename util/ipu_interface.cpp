@@ -62,7 +62,7 @@ IPU_Interface::IPU_Interface() : tensor_rq("log/tensor_requests.txt", "Tensor Re
 
     // attempt to attach to ipu
     bool success = false;
-    size_t skips = 4;
+    size_t skips = 40;
     size_t ipus = 1;
 
     for (auto &hwDevice : manager.getDevices(poplar::TargetType::IPU, ipus)) {

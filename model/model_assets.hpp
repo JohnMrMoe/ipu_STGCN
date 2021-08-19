@@ -46,6 +46,7 @@ string _shapestring(vector<size_t> shape);
 vector<size_t> out_shape(vector<size_t> input_shape, vector<size_t> kernel_shape, vector<size_t> padding = vector<size_t>{1, 1, 1, 1}, vector<size_t> stride  = vector<size_t>{1, 1, 1, 1});
 Tensor conv2d(IPU_Interface &ipu, Graph &g, Tensor &input, vector<size_t> filter_size, string filter_scope, string bias_scope, Tensor &output, Sequence &prog, bool biased=false);
 Tensor conv2d_SAME(IPU_Interface &ipu, Graph &g, Tensor &input, vector<size_t> filter_shape, string filter_scope, string bias_scope, Tensor &output, Sequence &prog, bool biased=false);
+pair<size_t, size_t> __calculate_SAME_padding(size_t k);
 
 Tensor verify_same_2(Graph &g, Tensor &res, Tensor &inp, Sequence &seq, string label = "UNTITLED_VER", bool correct = false);
 Tensor verify_same(IPU_Interface &ipu, Graph &g, Tensor &res, string file, Sequence &seq, bool correct = false);

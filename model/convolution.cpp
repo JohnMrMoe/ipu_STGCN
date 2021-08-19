@@ -210,6 +210,11 @@ Tensor conv2d_SAME(IPU_Interface &ipu,
 
   Tensor output_t = poplin::convolution(g, input_t, filter, cp, false, seq, DebugContext(filter_scope + ":<CONV>"));
 
+  // std::cout << filter_scope << '\n';
+  // std::cout << "input.shape    = " << input.shapeToString() << '\n';
+  // std::cout << "input_t.shape  = " << input_t.shapeToString() << '\n';
+  // std::cout << "output_t.shape = " << output_t.shapeToString() << '\n';
+
 
   if (biased) {
     Tensor bias = poplin::createBiases(g, output_t, "conv2d.s <" + filter_scope + "> bias");
@@ -220,5 +225,7 @@ Tensor conv2d_SAME(IPU_Interface &ipu,
 
 
   output = transp_0123_0231(ipu, g, output_t, output, seq);
+  std::cout << "output.shape = " << output.shapeToString() << '\n';
+
   return output;
 }
