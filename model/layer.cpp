@@ -21,6 +21,7 @@
 #include <popops/Reduce.hpp>
 #include <popnn/Pooling.hpp>
 #include <popnn/PoolingDef.hpp>
+#include <popops/Fill.hpp>
 
 using namespace poplar;
 using namespace poplar::program;
@@ -184,7 +185,7 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   FileFedVector ffv_g(scope + "=Gamma", N*C);
   FileFedVector ffv_b(scope + "=Beta", N*C);
 
-  Tensor gamma = ipu.getVariable(g, "gamma", std::vector<size_t>{1, 1,  N,  C}, FILEFD_TENSOR, ffv_g.permanent_pointer);// TODO ASSERT CORRECT FILL?
+  Tensor gamma = ipu.getVariable(g, "gamma." + scope, std::vector<size_t>{1, 1,  N,  C}, FILEFD_TENSOR, ffv_g.permanent_pointer);// TODO ASSERT CORRECT FILL?
   Tensor beta  = ipu.getVariable(g, "beta",  std::vector<size_t>{1, 1,  N,  C}, FILEFD_TENSOR, ffv_b.permanent_pointer);// TODO ASSERT CORRECT FILL?
   Tensor _1eminsix = g.addConstant<float>(poplar::FLOAT, {1}, {0.000001});
   g.setTileMapping(_1eminsix, 0);
@@ -202,6 +203,7 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
 
   popops::divInPlace(g, norm, sqrt_sigma, norm_layer); // -- Problem
   popops::mulInPlace(g, norm, gamma, norm_layer);
+
   popops::addInPlace(g, norm, beta, norm_layer);
 
   norm_layer.add(Copy(norm, dst));
@@ -211,8 +213,6 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
     // with help from https://kratzert.github.io/2016/02/12/understanding-the-gradient-flow-through-the-batch-normalization-layer.html
     // get the gradients?
   Sequence bwd;
-
-  std::cout << "dst.shape = " << dst.shapeToString() << '\n';
 
   popnn::pooling::PoolParams pooler(
     popnn::PoolingType::SUM,
@@ -226,23 +226,20 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
     poplar::FLOAT
   );
 
-  cout << "Pool is complete!\n";
-
   Tensor deltaBias = popnn::pooling::pool(g, pooler, dst, bwd);
 
-  cout << "m1: " << xmmu.transpose().shapeToString() << " X " << dst.shapeToString() << "\n";
-  cout << "m2: " << dst.shapeToString() << " X " << gamma.transpose().shapeToString() << "\n";
+  Tensor deltaWeights  = popops::mul(g, xmmu, dst,   bwd/*, poplar::FLOAT*/);
+  Tensor bwError       = popops::mul(g, dst, gamma,  bwd/*, poplar::FLOAT*/);
 
-  Tensor deltaWeights  = poplin::matMul(g, xmmu.transpose(), dst,   bwd, poplar::FLOAT);
-  Tensor bwError       = poplin::matMul(g, dst, gamma.transpose(), bwd, poplar::FLOAT);
+  /* ALT
+  Tensor deltaWeights  = popops::matMul(g, xmmu.dimShuffle({0, 1, 3, 2}), dst,   bwd , poplar::FLOAT);
+  Tensor bwError       = popops::matMul(g, dst, gamma.dimShuffle({0, 1, 3, 2}),  bwd , poplar::FLOAT);
+  */
 
-  std::cout << "\tHEY #" << '\n';
+    // Update beta/gamma
+  // popops::addInPlace(g, beta, deltaBias, bwd);     overlapping writes? TODO
+  // popops::addInPlace(g, gamma, deltaWeights, bwd); overlapping writes? TODO
 
-    // Alt beta/gamma
-  popops::addInPlace(g, beta, deltaBias, bwd);
-  popops::addInPlace(g, gamma, deltaWeights, bwd);
-
-  std::cout << "\tHEY #" << '\n';
     //
   Tensor  one = g.addConstant<float>(poplar::FLOAT, {1}, { 1});
   Tensor mone = g.addConstant<float>(poplar::FLOAT, {1}, {-1});
@@ -251,27 +248,27 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   g.setTileMapping(mone, 1471);
   g.setTileMapping(p5, 1471);
   Tensor invSigma = popops::div(g, one, sqrt_sigma, bwd);
-  Tensor divar = poplin::matMul(g, bwError, xmmu, bwd, poplar::FLOAT);
-  Tensor dxmu1 = poplin::matMul(g, bwError, invSigma, bwd, poplar::FLOAT);
+  Tensor divar = popops::mul(g, bwError, xmmu, bwd);
+  Tensor dxmu1 = popops::mul(g, bwError, invSigma, bwd);
 
-  std::cout << "\tHEY #" << '\n';
 
   // #step6 var=sigma
   // dsqrtvar = -1. /(sqrtvar**2) * divar
   Tensor dsqrtvar = popops::div(g, mone, sigma, bwd);
-  popops::mulInPlace(g, dsqrtvar, divar, bwd);
+  // popops::mulInPlace(g, dsqrtvar, divar, bwd); OVerlapping write, TODO
 
-  std::cout << "\tHEY #" << '\n';
 
   // #step5
   // dvar = 0.5 * 1. /np.sqrt(var+eps) * dsqrtvar
   Tensor dvar = popops::div(g, p5, sqrt_sigma, bwd);
   popops::mulInPlace(g, dvar, dsqrtvar, bwd);
 
+  cout << scope << "\t dvar.shape= " << dvar.shapeToString() << "\n";
+
   // #step4
   // dsq = 1. /N * np.ones((N,D)) * dvar
-  FeedinVector fv(dst.numElements()); fv.valfill(1. / (x.shape()[2] * x.shape()[3]));
-  Tensor flector = ipu.getVariable(g, "flector", dst.shape(), FEEDIN_TENSOR, fv.permanent_pointer);
+  FeedinVector fv(dvar.numElements()); fv.valfill(1. / (x.shape()[2] * x.shape()[3]));
+  Tensor flector = ipu.getVariable(g, "flector", dvar.shape(), FILEFD_TENSOR, fv.permanent_pointer);
 
   Tensor dsq = popops::mul(g, flector, dvar, bwd);
 
@@ -280,26 +277,25 @@ Tensor layer_norm         (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &dst,
   Tensor two = ipu.getVariable_OLD(g, "two");
   popops::mulInPlace(g, xmmu, two, bwd);
   popops::mulInPlace(g, xmmu, dsq, bwd);
-  Tensor dxmu2 = xmmu;
+  // dxmu2 = xmmu;
 
-  std::cout << "\tHEY #" << '\n';
 
   // #step2
   // dx1 = (dxmu1 + dxmu2)
   // dmu = -1 * np.sum(dxmu1+dxmu2, axis=0)
-  popops::addInPlace(g, dxmu1, dxmu2, bwd);
+  popops::addInPlace(g, dxmu1, xmmu, bwd);
   Tensor dx1 = dxmu1;
 
   Tensor dmu = popnn::pooling::pool(g,
                     popnn::pooling::PoolParams(
                      popnn::PoolingType::SUM,
-                     vector<size_t>{x.shape()[2], x.shape()[3]},
-                     vector<size_t>{x.shape()[2], x.shape()[3]},
+                     vector<size_t>{dx1.shape()[2], dx1.shape()[3]},
+                     vector<size_t>{dx1.shape()[2], dx1.shape()[3]},
                      vector<unsigned>{1, 1},
                      vector<int>{0, 0},
                      vector<int>{0, 0},
-                     x.shape()[1],
-                     x.shape()[0],
+                     dx1.shape()[1],
+                     dx1.shape()[0],
                      poplar::FLOAT
                    ),
                    dx1,
@@ -339,15 +335,16 @@ Tensor temporal_conv_layer(IPU_Interface &ipu, Graph &g, Tensor &src, Tensor &ds
   Tensor x_input;
   Tensor x;
 
+
+  Sequence bwd_ch;
   if (c_in > c_out) {
     vector<size_t> kernel_shape = {1, 1,  c_in,  c_out};
     Tensor feed = ipu.getAlternatingSpace("layer", out_shape(src.shape(), kernel_shape));
     x_input = conv2d_SAME(ipu, g, src, kernel_shape, scope + "=w_input", "N/A", feed, tconv_layer);
   } else if (c_in < c_out) {
-    // PADDING
     Tensor padding = ipu.getExistingVariableSlice("PAD", {shape[0], T, n,  (c_out-c_in)}, {0, 0, 0, 0}, 0);
     x_input = poplar::concat(src, padding, 3);
-  } else { /*if (c_in == c_out)*/
+  } else {
     x_input = src;
   }
 
@@ -356,73 +353,85 @@ Tensor temporal_conv_layer(IPU_Interface &ipu, Graph &g, Tensor &src, Tensor &ds
      std::vector<size_t>{x_input.shape()[0], T, x_input.shape()[2], x_input.shape()[3]}
   );
 
-
-  Tensor wt, bt, x_conv, filter;
+  Tensor wt, bt, x_conv, filter, conv_error;
   // ACT FUNC DEPENDENT CODE:
   string s_wt_token = scope + "=wt[" + act_func + "]";
   string s_bt_token = scope + "=bt[" + act_func + "]";
 
+  filter_shape = {Kt, 1, c_in, c_out * (act_func=="GLU"? 2 : 1)};
+  Tensor output = ipu.getVariable(g, "output", out_shape(src.shape(), filter_shape));
+  Sequence bwd_conv;
+  x_conv = conv2d(ipu, g, src, filter_shape, s_wt_token, s_bt_token, output, tconv_layer, true);
 
+  Sequence bwd_activation;
   if (act_func == "GLU") {
-
-    filter_shape = {Kt, 1, c_in, 2*c_out};
-
-    Tensor output = ipu.getVariable(g, "output", out_shape(src.shape(), filter_shape));
-
-
-
-    Tensor x_conv = conv2d(ipu, g, src, filter_shape, s_wt_token, s_bt_token, output, tconv_layer, true);
-
-    // bt = ipu.getVariable(g, "bt", std::vector<std::size_t>{2*c_out}, 0);
-    // popops::addInPlace (g, x_conv, bt, tconv_layer);
-
     vector<size_t> x_shape = x_conv.shape();
     x_shape[3] = c_out;
-
     Tensor sig = ipu.getAlternatingSpace("layer", x_shape);
     tconv_layer.add(Copy(x_conv.slice(std::vector<std::size_t>{0, 0, 0, x_conv.shape()[3]-c_out}, x_conv.shape()), sig));
     nonLinearityInPlace(g, popnn::NonLinearityType::SIGMOID, sig, tconv_layer);
-
     Tensor x_con_slice = x_conv.slice(vector<size_t>{0, 0, 0, 0},
                                       vector<size_t>{x_conv.shape()[0],
                                                      x_conv.shape()[1],
                                                      x_conv.shape()[2],
                                                      c_out});
-
     popops::addInPlace(g, x_con_slice, x_input, tconv_layer);
-
     popops::mulInPlace(g, x_con_slice, sig, tconv_layer);
     tconv_layer.add(Copy(x_con_slice, dst));
 
-  } else {
-    filter_shape = {Kt, 1, c_in, c_out};
+    // Backwards
+    bwd_activation.add(Copy(dst, x_con_slice));
+      // verify this maybe
+    Tensor conv_error = popops::mul(g, x_con_slice, sig, bwd_activation);
 
+      // slice error propagate
+    popops::subInPlace(g, conv_error, x_input, bwd_activation);
 
-    vector<size_t> shape_out = out_shape(src.shape(), filter_shape);
-
-    Tensor x_conv = ipu.getVariable(g, "output", shape_out);
-
-    x_conv = conv2d(ipu, g, src, filter_shape, s_wt_token, s_bt_token, x_conv, tconv_layer, true);
-
-    //
-    // bt = ipu.getVariable(g, "bt", std::vector<std::size_t>{c_out}, 0);
-    //
-    // popops::addInPlace (g, x_conv, bt, tconv_layer);
-
-    if (act_func=="linear") {
-      // nothing
-    } else if (act_func=="sigmoid") {
-      popops::sigmoidInPlace(g, x_conv, tconv_layer);
-    } else if (act_func=="relu") {
-      popops::addInPlace(g, x_conv, x_input, tconv_layer);
-      popnn::reluInPlace(g, x_conv, tconv_layer);
-    } else {
-      cout << "ERROR: Invalid Activation function:  <<" << act_func << "\n";
-    }
-
-    // copy solution to destination.
+  } else if (act_func=="linear") {
+    // nothing
     tconv_layer.add(Copy(x_conv, dst));
+
+    bwd_activation.add(Copy(dst, x_conv));
+    conv_error = x_conv;
+  } else if (act_func=="sigmoid") {
+    popops::sigmoidInPlace(g, x_conv, tconv_layer);
+    tconv_layer.add(Copy(x_conv, dst));
+
+    // Backwards pass
+    bwd_activation.add(Copy(dst, x_conv));
+    Tensor ones = ipu.getVariable(g, "sig."+scope, x_conv.shape());
+    popops::fill<float>(g, ones, bwd_activation, 1);
+    popops::sigmoidInPlace(g, x_conv, bwd_activation);
+    popops::subInPlace(g, ones, x_conv, bwd_activation);
+    popops::mulInPlace(g, x_conv, ones, bwd_activation);
+    conv_error = x_conv;
+
+  } else if (act_func=="relu") {
+    std::cout << "Employing RELU at " << scope << '\n';
+
+    popops::addInPlace(g, x_conv, x_input, tconv_layer);
+    popnn::reluInPlace(g, x_conv, tconv_layer);
+    tconv_layer.add(Copy(x_conv, dst));
+
+    // Backward over RELU
+      // -- x_conv holds the error
+    bwd_activation.add(Copy(dst, x_conv));
+    popnn::reluInPlace(g, x_conv, bwd_activation); // set to zero if less than <=0
+    popops::divInPlace(g, x_conv, dst, bwd_activation); // now they should all be 0s or 1s
+    popops::subInPlace(g, x_conv, x_input, bwd_activation);
+    conv_error = x_conv;
+
+  } else {
+    cout << "ERROR: Invalid Activation function:  << " << act_func << "\n";
   }
+
+
+
+  Sequence bwd;
+  bwd.add(bwd_activation);
+  bwd.add(bwd_conv);
+
+
   layer_exit_note(ipu, "TEMPORAL_CONV_LAYER", scope);
 
   seq.add(tconv_layer);
@@ -475,25 +484,45 @@ Tensor spatio_conv_layer  (IPU_Interface &ipu, Graph &g, Tensor &src, Tensor &ds
                              n,
                              c_in});
 
+  Sequence bwd_gconv;
   gconv_out = gconv(ipu, g, re_x, gconv_out, ws, Ks,  c_in,  c_out, spatio_conv_layer, "ST-CONV-LAYER");
   popops::addInPlace (g, gconv_out, bs, spatio_conv_layer);
 
 
 
-  Tensor re_gconv = gconv_out.reshape(vector<size_t>{
-                                    minus_one_val(gconv_out.shape(), vector<size_t>{T, n, c_out}),
-                                    T, n, c_out});
-
-
-  Tensor outslice = re_gconv.slice( vector<size_t>{       0, 0, 0,     0},
-                                    vector<size_t>{minus_one_val(re_gconv.shape(), vector<size_t>{T, n, c_out}),
-                                                   T, n,  c_out});
+  Tensor re_gconv = gconv_out.reshape(vector<size_t>{minus_one_val(gconv_out.shape(), vector<size_t>{T, n, c_out}), T, n, c_out});
+  Tensor outslice = re_gconv.slice(vector<size_t>{0, 0, 0, 0}, vector<size_t>{minus_one_val(re_gconv.shape(), vector<size_t>{T, n, c_out}), T, n,  c_out});
   popops::addInPlace(g, outslice, x_input, spatio_conv_layer);
-
-
   popnn::reluInPlace(g, outslice, spatio_conv_layer);
 
   spatio_conv_layer.add(Copy(outslice, dst));
+
+  // BACKWARD PASS
+  Sequence bwd;
+
+    // backward over relu!
+  popops::fill<float>(g, outslice, bwd, 1);
+  popnn::reluInPlace(g, dst, bwd);
+  popops::subInPlace(g, outslice, dst, bwd);
+  popops::mulInPlace(g, dst, outslice, bwd);
+    // Backward over addition!
+  popops::subInPlace(g, dst, x_input, bwd);
+  // we should not have to do anything about the reshape and slice...
+  // bias (bs) adjustments
+  Tensor deltaBias = popnn::pooling::pool(g, popnn::pooling::PoolParams(
+    popnn::PoolingType::SUM,
+    vector<size_t>{dst.shape()[2], dst.shape()[3]}, // field shape
+    vector<size_t>{dst.shape()[2], dst.shape()[3]}, // kernel shape
+    vector<unsigned>{1, 1},                        // stride
+    vector<int>{0, 0},    // pad
+    vector<int>{0, 0},    // pad
+    dst.shape()[1],     // channels
+    dst.shape()[0],     // batch size
+    poplar::FLOAT), dst, bwd);
+  popops::addInPlace(g, bs, deltaBias, bwd);
+    // add the reverse convolution
+    // should we address x_input???
+  bwd.add(bwd_gconv);
 
   layer_exit_note(ipu, "SPATIO_CONV_LAYER", "");
   seq.add(spatio_conv_layer);
@@ -517,6 +546,8 @@ Tensor st_conv_block      (IPU_Interface &ipu, Graph &g, Tensor &x, size_t Ks, s
   Sequence exe_st_conv_block;
 
   // exe_st_conv_block.add(ipu.notification(g, "ST-CONV-BLOCK ["+scope+"]{"+to_string(channels[0])+","+to_string(channels[1])+","+to_string(channels[2])+"}"));
+  Sequence bwd_t1, bwd_st, bwd_t2, bwd_ln;
+
 
   t_out_1 = temporal_conv_layer(ipu, g, x,    t_out_1, Kt, c_si, c_t, exe_st_conv_block, "stn_block_" + scope + "_in", act_func);
   sout    = spatio_conv_layer  (ipu, g, t_out_1, sout, Ks, c_t, c_t,  exe_st_conv_block, "stn_block_" + scope + "_spt");
@@ -580,21 +611,19 @@ Tensor output_layer       (IPU_Interface &ipu, Graph &g, Tensor &x, Tensor &out,
   size_t n       = shp[2];
   size_t channel = shp[3];
 
+  Sequence bwd_t1, bwd_ln, bwd_t2, bwd_fc;
 
 
-
-  // verification_pass(ipu, g, x, scope+"[F-T0]", seq);
   x2  = temporal_conv_layer(ipu, g, x,  x2, T, channel, channel, seq, scope+"_in", act_func);
-  // verification_pass(ipu, g, x2, scope+"[F-T1]", seq);
 
   x1  = layer_norm         (ipu, g, x2, x1, seq, "layer_norm_" + scope);
-  // verification_pass(ipu, g, x1, scope+"[F-LN]", seq);
 
   x2  = temporal_conv_layer(ipu, g, x1, x2, 1, channel, channel, seq, scope+"_out", "sigmoid");
-  // verification_pass(ipu, g, x2, scope+"[F-T2]", seq);
 
   out = fully_con_layer    (ipu, g, x2, out, n, channel, seq, scope);
-  // verification_pass(ipu, g, out, scope+"[F-OUT]", seq);
+
+  bwd.add(bwd_fc); bwd.add(bwd_x2); bwd.add(bwd_ln); bwd.add(bwd_x1);
+
 
   layer_exit_note(ipu, "OUTPUT_LAYER", scope);
   return out;

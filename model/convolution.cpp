@@ -225,7 +225,6 @@ Tensor conv2d_SAME(IPU_Interface &ipu,
 
 
   output = transp_0123_0231(ipu, g, output_t, output, seq);
-  std::cout << "output.shape = " << output.shapeToString() << '\n';
 
   return output;
 }
