@@ -133,58 +133,84 @@ int main(int argc, char const *argv[]) {
   // ipu.finalize_and_run(graph, seq);
   //
   // return 0;
+  tuple<Program, Program, Tensor> assets = build_model(blocks, args, ipu, graph);
+  Program model   = get<0>(assets);
+  Program bwd_p   = get<1>(assets);
+  Tensor  product = get<2>(assets);
 
-  tuple<Program, Tensor, Tensor> assets = model_train(dataset, blocks, args, ipu, graph);
-  Program model     = get<0>(assets);
-  Tensor train_loss = get<1>(assets);
-  Tensor pred_y     = get<2>(assets);
+  vector<Program> progs{model, bwd_p};
 
-  Engine engine = ipu.finalize_and_run(graph, model, false);
+  Engine engine = ipu.finalize(graph, progs);
 
-  double ms = time_run(engine, "STGCN");
+  size_t batches = (dataset.train.W - (dataset.train.W % args.batch_size)) / args.batch_size;
+  size_t runs = args.epoch * batches;
 
-  size_t runs = 50; // should be an odd number
-  if (runs%2==0) runs++;
 
-  double * times = (double *) malloc(sizeof(double) * runs);
-  double total;
+  double * times_run = (double *) malloc(sizeof(double) * runs);
+  double * times_trn = (double *) malloc(sizeof(double) * runs);
+  double total_run;
+  double total_trn;
 
   string timeunit = "ms";
-  std::cout << "Preliminary Run timed at " << ms << " " << timeunit << '\n';
-  // cout << "Press Enter to Continue";
-  // cin.ignore();
-  // cout << "Executing " << runs << " runs.\n";
 
-  for (size_t i = 0; i < runs; i++) {
-    times[i] = time_run(engine, "STGCN #" + to_string(i));
-    if (i%10==0&&i) std::cout << "Run: " << (i<100?" ":"") << (i<10?" ":"") << i << '\n';
-    total += times[i];
-  }
+  std::vector<size_t> shape {args.batch_size,
+                               args.n_his + 1,
+                               args.n_route,
+                               1};
 
-  size_t step = 5;
-  cout << " +-----------------------------------------------------------\n";
-  cout << " | TIMES:\n";
-  cout << " |\tListing:\n";
-  for (size_t i = 0; i < runs; i+=step) {
-    if (i+step>runs) {
-      cout << " |\t\t";
-      for (i=i; i < runs; i++) std::cout << times[i] << (i==runs-1?"\n":", ");
-    } else {
-      cout << " |\t\t" << times[i] << ", " << times[i+1] << ", " << times[i+2] << ", " << times[i+3] << ", " << times[i+4] << "\n";
+  size_t plane = (args.n_his + 1) * args.n_route;
+  size_t * permutation = (size_t *) malloc (sizeof(size_t) * dataset.train.W);
+  float  * input_buffr = (float  *) malloc (sizeof(float)  * args.batch_size * plane);
+
+  for (size_t i = 0; i < dataset.train.W; i++) permutation[i] = i;
+
+  // #include <algorithm>
+
+  cout << "Epochs: " << args.epoch << ", batches: " << batches << '\n';
+  for (size_t   epoch = 0; epoch < args.epoch; epoch++) {
+    cout << "\tEpoch #" << epoch <<  '\n';
+    for (size_t batch = 0; batch < batches   ; batch++) {
+      size_t batch_idx =   batch * args.batch_size;
+      for (size_t cube= 0; cube  < args.batch_size; cube++) {
+        memcpy(
+          (void *) (dataset.train.data + dataset.train.ZYX * permutation [batch_idx + cube]),
+          (void *) (input_buffr        + dataset.train.ZYX * cube), plane
+        );
+      }
+      // WRITE to input!
+      engine.writeTensor(StringRef("input"), input_buffr, &input_buffr[args.batch_size * plane  ]);
+
+      // forward and backward pass
+      total_run +=
+        times_run[epoch * batches + batch]
+          = time_run(engine, "Forward  Pass #"+to_string(epoch)+":"+to_string(batch), 0);
+      total_trn +=
+        times_trn[epoch * batches + batch]
+          = time_run(engine, "Backward Pass #"+to_string(epoch)+":"+to_string(batch), 1);
+
+      //
     }
   }
 
-  sort(times, times+runs);
-
-  cout << " |\tMedian:  " << times[(runs - (runs%2))/2] << timeunit << "\n";
-  cout << " |\tAverage: " << total/runs << timeunit << "\n";
-  cout << " |\tMinimum: " << times[0] << timeunit << "\n";
-  cout << " |\tMaximum: " << times[runs-1] << timeunit << "\n";
+  sort(times_run, times_run+runs);
+  sort(times_trn, times_trn+runs);
+  cout << " +-----------------------------------------------------------\n";
+  cout << " | TIMES:\n";
+  cout << " |\tForward Pass";
+  cout << " |\t\tMedian:  " << times_run[(runs - (runs%2))/2] << timeunit << "\n";
+  cout << " |\t\tAverage: " << total_run/runs << timeunit << "\n";
+  cout << " |\t\tMinimum: " << times_run[0] << timeunit << "\n";
+  cout << " |\t\tMaximum: " << times_run[runs-1] << timeunit << "\n";
+  cout << " |\tBackward Pass";
+  cout << " |\t\tMedian:  " << times_trn[(runs - (runs%2))/2] << timeunit << "\n";
+  cout << " |\t\tAverage: " << total_trn/runs << timeunit << "\n";
+  cout << " |\t\tMinimum: " << times_trn[0] << timeunit << "\n";
+  cout << " |\t\tMaximum: " << times_trn[runs-1] << timeunit << "\n";
   cout << " +-----------------------------------------------------------\n";
 
 
-
-  free(times);
+  free(times_run);
+  free(times_trn);
 
   return 0;
 }

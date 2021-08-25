@@ -7,7 +7,7 @@ DRND			:= -D_DERANDOMIZE
 VERI      := -D_VERIFICATION
 POPLAR	  := -lpoplar -lpoputil -lpopops -lpoplin -lpopsparse -lpopnn -lpoprand -fopenmp
 POPVISION := POPLAR_ENGINE_OPTIONS='{"autoReport.all":"true", "autoReport.directory":"./report"}'
-BSZ				:= --batch_size 30
+BSZ				:= --batch_size 19
 # POP :=
 
 C_FILES = $(wildcard util/*.cpp) $(wildcard data/*.cpp) $(wildcard model/*.cpp)

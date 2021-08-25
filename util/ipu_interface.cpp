@@ -55,14 +55,14 @@ IPU_Interface::IPU_Interface() : tensor_rq("log/tensor_requests.txt", "Tensor Re
                                  feedin_dt("log/feedin_reports.txt" , "Feedin Report"    ),
                                  model_log("log/model.txt" ,          "Model Declaration")
 {
-
+  cout << "Device Attachment" << '\n';
   // get the things
   #ifdef _IRL_IPU
     DeviceManager manager = DeviceManager::createDeviceManager();
 
     // attempt to attach to ipu
     bool success = false;
-    size_t skips = 40;
+    size_t skips = 0;
     size_t ipus = 1;
 
     for (auto &hwDevice : manager.getDevices(poplar::TargetType::IPU, ipus)) {
@@ -342,7 +342,7 @@ void IPU_Interface::glorot_fill(float *ptr, size_t len, std::vector<std::size_t>
   }
 
 }
-Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
+Engine IPU_Interface::finalize(Graph &g, vector<Program> progs) {
   printf("\n-----\nFINALIZING:\n");
 
   string label;
@@ -375,12 +375,15 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
       case (FEEDIN_TENSOR): feedin_dt.log("FEEDIN_TENSOR"); break;
       case (AUTOFL_TENSOR): feedin_dt.log("AUTOFL_TENSOR"); break;
       case (FILEFD_TENSOR): feedin_dt.log("FEEDFL_TENSOR"); break;
+      case (INPUT_TENSOR): feedin_dt.log("INPUT_TENSOR"); break;
       default:              feedin_dt.log("No type for: " + (label + "\t, type: " + to_string(t_type) + ", &" + to_string((size_t) pointr)) + "!!!", "", true);
     }
 
     size_X = tensor.flatten().shape()[0];
 
-    if (t_type == GLOROT_TENSOR || t_type == FEEDIN_TENSOR || t_type ==FILEFD_TENSOR) {
+    if (t_type == GLOROT_TENSOR || t_type == FEEDIN_TENSOR || t_type ==FILEFD_TENSOR || t_type ==INPUT_TENSOR) {
+
+      if (t_type ==INPUT_TENSOR) std::cout << "Created hostwrite ref for input: " << StringRef(label)<< '\n';
       g.createHostWrite(StringRef(label), tensor);
     } else if (t_type == ZEROFL_TENSOR) {
       zerofills.push_back(tuple<Tensor, size_t>(tensor, size_X));
@@ -395,12 +398,11 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
   float* empty = (float *) calloc (largest_zero, sizeof(float));
 
   // OptionFlags opts = {{"debug.allowOutOfMemory", "true"}};
-  vector<Program> runnables{model /*, exports*/};
   OptionFlags opts = {};
   std::cout << "\t\tCOMPILING GRAPH...\n";
 
   auto run_start = std::chrono::high_resolution_clock::now();
-  auto exes = poplar::compileGraph(g, runnables, opts, progress);
+  auto exes = poplar::compileGraph(g, progs, opts, progress);
   auto run_end = std::chrono::high_resolution_clock::now();
 
   auto s = std::chrono::duration_cast<std::chrono::nanoseconds>(run_end - run_start).count() / 1e9;
@@ -445,6 +447,10 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
         zerox++;
 
         break;
+      case (INPUT_TENSOR):
+        // don't do anything, we write here later.
+        break;
+
       case (GLOROT_TENSOR):
 
         handle = StringRef(label);
@@ -473,12 +479,6 @@ Engine IPU_Interface::finalize_and_run(Graph &g, Program model, bool run) {
         printf("\tUNDEFINED WRITING: %d", t_type);
         break;
     }
-  }
-  // Run the control program
-  if (run) {
-    std::cout << "Running program\n";
-    engine.run(0);
-    std::cout << "Program complete\n";
   }
 
   return engine;

@@ -228,3 +228,93 @@ Tensor conv2d_SAME(IPU_Interface &ipu,
 
   return output;
 }
+
+
+
+Tensor conv2D_w_bwd(IPU_Interface &ipu, Graph &g,
+                    Tensor &input,
+                    vector<size_t> filter_shape, string filter_scope, string bias_scope,
+                    Tensor &output,
+                    Sequence &seq, Sequence &bwd,
+                    bool biased, bool same
+                  )
+{
+    size_t cnvg = 1, ch = input.shape()[3];
+
+      pair<size_t, size_t> padH, padW;
+
+
+    if ((filter_shape[0] == 1 && filter_shape[1] == 1) ||!same) {
+      padH.first = padH.second = padW.first = padW.second = 0;
+    } else if (same) {
+      padH = __calculate_SAME_padding(filter_shape[0]);
+      padW = __calculate_SAME_padding(filter_shape[1]);
+    }
+
+    vector<size_t> ipu_filter_shape = vector<size_t>{cnvg,
+                                                     filter_shape[3]/cnvg, //
+                                                     filter_shape[2]/cnvg, //
+                                                     filter_shape[0],
+                                                     filter_shape[1]};
+    vector<size_t> inputFieldShape = vector<size_t>{ input.shape()[1] + padH.first + padH.second,
+                                                     input.shape()[2] + padW.first + padW.second};
+    vector<size_t> kernelShape = vector<size_t>{     filter_shape[0],
+                                                     filter_shape[1]};
+
+    poplin::ConvParams cp(poplar::FLOAT, input.shape()[0], inputFieldShape, kernelShape, input.shape()[3], filter_shape[3], cnvg);
+    Tensor input_t = createInput(g,   cp, "conv2d.s <" + filter_scope + "> same");
+    Tensor filter  = createWeights(g, cp, "conv2d.s <" + filter_scope + "> weights");
+
+
+    Tensor ungrouped = input_t.reshape({input.shape()[0], ch, input_t.shape()[2], input_t.shape()[3]});
+    Tensor tf_shaped = ungrouped.dimShuffle({0, 2, 3, 1});
+    Tensor port = tf_shaped.slice({0, padH.first, padW.first, 0},
+                                  {input.shape()[0], input.shape()[1] + padH.first,
+                                   input.shape()[2] + padW.first, ch});
+    seq.add(Copy(input, port));
+
+    FileFedVector kernel(filter_scope, filter.numElements());
+    Tensor refilter = filter.reshape({filter_shape[3], filter_shape[2], filter_shape[0], filter_shape[1]});
+    ipu.addVariable(filter_scope, refilter, 4, kernel.permanent_pointer);
+
+    Tensor output_t = poplin::convolution(g, input_t, filter, cp, false, seq);
+
+    transp_0123_0312(ipu, g, output, output_t, bwd);
+    Tensor scale = g.addConstant<float>(poplar::FLOAT, {1}, {.5}); g.setTileMapping(scale, 0);
+    poplin::convolutionWeightUpdate(g, output_t, filter, input_t, cp, scale, bwd);
+
+
+    if (biased) {
+      Tensor bias = poplin::createBiases(g, output_t, "conv2d.s <" + filter_scope + "> bias");
+      FileFedVector bias_feed(bias_scope, bias.flatten().shape()[0]);
+      ipu.addVariable(bias_scope, bias, 4, bias_feed.permanent_pointer);
+      poplin::addBias(g, output_t, bias, seq);
+      poplin::convolutionBiasUpdate(g, output_t, bias, scale, {}, bwd);
+    }
+
+    // remake filter into input
+      // filter with weights rotated 180 degrees (channels remain the same)
+    unsigned int d = filter.shape().size();
+    Tensor rotFilter = filter.dimShufflePartial({d-4, d-3}, {d-3, d-4}); // flip in/out weigths
+           rotFilter = rotFilter.reverse(d-2); // reverse weights
+           rotFilter = rotFilter.reverse(d-1); // reverse weights
+      // get error back to NCHW format
+    Tensor zDeltas_injection = output.dimShuffle({0, 3, 1, 2});
+    Tensor zDeltas = ipu.padTensor(g, zDeltas_injection,
+                                   {0, 0, rotFilter.shape()[d-2]-1, rotFilter.shape()[d-1]-1},
+                                   {0, 0, rotFilter.shape()[d-2]-1, rotFilter.shape()[d-1]-1});
+
+    poplin::ConvParams cp_bw(poplar::FLOAT, zDeltas.shape()[0],
+                          {zDeltas.shape()[2], zDeltas.shape()[3]},
+                          {rotFilter.shape()[d-2], rotFilter.shape()[d-1]},
+                          rotFilter.shape()[d-3], rotFilter.shape()[d-4], cnvg
+                        );
+
+    // perform convolution
+    Tensor error = poplin::convolution(g, zDeltas, rotFilter, cp_bw, false, bwd);
+
+    bwd.add(Copy(error.dimShuffle({0, 2, 3, 1}), input));
+
+
+    return transp_0123_0231(ipu, g, output_t, output, seq);
+}

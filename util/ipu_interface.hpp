@@ -35,6 +35,7 @@
 #define FEEDIN_TENSOR 2  // fill using the float pointer
 #define AUTOFL_TENSOR 3  // This Tensor should not be fed
 #define FILEFD_TENSOR 4
+#define INPUT_TENSOR 5
 #define NULL_VECTOR std::vector<size_t>(0)
 
 #define Tensor_Entry std::tuple<std::string, Tensor, int, float*>
@@ -156,7 +157,7 @@ public:
   Tensor getAlternatingSpace(string type, std::vector<size_t> shape);
   float random(float top, size_t div = 10000);
   void glorot_fill(float *ptr, size_t len, std::vector<std::size_t> shape);
-  Engine finalize_and_run(Graph &g, Program model, bool run=false);
+  Engine finalize(Graph &g, vector<Program> model);
   Program notification(Graph &g, string notification);
   void retain(FileFedVector &ffv);
 };

@@ -17,10 +17,17 @@ using namespace poplar::program;
 
 #define min(y, x) (y < x ? y : x)
 
-Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t blocks[B_OUT][B_IN], IPU_Interface &ipu, Graph &g)  {
-  std::vector<std::size_t> shape = input.shape();
+tuple<Program, Program, Tensor> build_model(size_t blocks[B_OUT][B_IN], Arguments args, IPU_Interface &ipu, Graph &g) {
+  // Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t blocks[B_OUT][B_IN], IPU_Interface &ipu, Graph &g)  {
+  std::vector<size_t> shape {args.batch_size,
+                               args.n_his + 1,
+                               args.n_route,
+                               1};
   std::vector<std::size_t> shape_end = shape;
-  shape_end[1] = n_his;
+  shape_end[1] = args.n_his;
+
+  Tensor input = ipu.getVariable(g, (string) "input",     shape, INPUT_TENSOR); // doesn't really matter!
+  Tensor kb    = ipu.getVariable(g, (string) "keep_prob", {1},   0);
 
   // we use two other places too
   Tensor two = (Tensor) g.addConstant<float>(FLOAT, {1}, {2.0});
@@ -28,7 +35,7 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   ipu.addVariable("two", two);
 
 
-  Sequence sq(ipu.notification(g, "VERIFICATION NOTIFICATION DELIBERATION " + ipu.shape_display(shape, "") + ", " + to_string(n_his)));
+  Sequence sq(ipu.notification(g, "VERIFICATION NOTIFICATION DELIBERATION " + ipu.shape_display(shape, "") + ", " + to_string(args.n_his)));
 
   Tensor x = input.slice({0,0,0,0},       //{0,                     0,        0,        0},
                          shape_end);       //{shape[0], (size_t) n_his, shape[2], shape[3]});
@@ -39,52 +46,48 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
     largest_channel = largest_channel > blocks[i][j] ? largest_channel : blocks[i][j];
   }
 
-
-  vector<size_t> tmp_sections = {shape[0], n_his, shape[2], largest_channel};
+  vector<size_t> tmp_sections{shape[0], args.n_his, shape[2], largest_channel};
   Tensor block_t1 = ipu.getVariable(g, "layer0", tmp_sections);
   Tensor block_t2 = ipu.getVariable(g, "layer1", tmp_sections);
-  // Tensor layer_t1 = ipu.getVariable(g, "block0", tmp_sections);
-  // Tensor layer_t2 = ipu.getVariable(g, "block1", tmp_sections);
 
   Tensor next_in = x;
-
   Sequence model(sq);
-
-  size_t Ko = n_his;
+  vector<Sequence> bwd;
+  size_t Ko = args.n_his;
 
   // ST BLOCK:
   for (size_t i = 0; i < 2; i++) {
-
     string scope = "st-conv[" + to_string(i) + "]";
-    next_in = st_conv_block(ipu, g, next_in, Ks, Kt, blocks[i], model, to_string(i), "GLU");
-
-    Ko-= 2 * (Ks - 1);
+    Sequence bwd_stcb;
+    next_in = st_conv_block(ipu, g, next_in, args.ks, args.kt, blocks[i], model, bwd_stcb, to_string(i), "GLU");
+    bwd.push_back(bwd_stcb);
+    Ko-= 2 * (args.ks - 1);
   }
-
-  // Output layer:
-  if (Ko <= 1) {
+  if (Ko <= 1) {// output layer
     printf("ERROR: Kernel size Ko must be greater than 1, but recieved %ld\n", Ko);
-    //???exit();
-    return model;
+    return tuple<Program, Program, Tensor>{model, model, next_in};
   }
   // y = [batch_size, 1, n_route, 1]
-  Tensor y = ipu.getVariable(g, "block", {next_in.shape()[0], 1, next_in.shape()[2], 1}, 0);
-  y = output_layer(ipu, g, next_in, y, Ko, model, "output_layer");
+  Tensor y = ipu.getVariable(g, "-Y-block", {next_in.shape()[0], 1, next_in.shape()[2], 1}, 0);
+  Sequence bwd_oula;
+  y = output_layer(ipu, g, next_in, y, Ko, model, bwd_oula, "output_layer");
+  bwd.push_back(bwd_oula);
 
-  // model.add(PrintTensor("Y :", y.reshape({y.shape()[0], y.shape()[2]}).slice({0, 0}, {6, 6}) ));
 
 
   Sequence loss_prog;
 
-  // Tensor single_pred = ipu.getVariable(g, "y_pred", {y.shape()[0], 1, y.shape()[2], y.shape()[3]}, 0);
+  Tensor single_pred = ipu.getVariable(g, "y_pred", {y.shape()[0], 1, y.shape()[2], y.shape()[3]}, 0);
   Tensor copy_loss  = ipu.getVariable(g, "copy_loss", {input.shape()[0], 1, input.shape()[2], input.shape()[3]}, 0);
   Tensor train_loss = ipu.getVariable(g, "train_loss", y.shape(), 0);
 
-  loss_prog.add(Copy(input.slice({0, n_his - 1, 0, 0}, {input.shape()[0], n_his, input.shape()[2], input.shape()[3]}), copy_loss));
+  model.add(Copy(y.slice({0, 0, 0, 0}, {y.shape()[0], 1, y.shape()[2], y.shape()[3]}), single_pred));
+
+  loss_prog.add(Copy(input.slice({0, args.n_his - 1, 0, 0}, {input.shape()[0], args.n_his, input.shape()[2], input.shape()[3]}), copy_loss));
   loss_prog.add(Copy(y, train_loss));
 
-  popops::minInPlace(g, copy_loss , input.slice({0, n_his, 0, 0}, {input.shape()[0], n_his+1, input.shape()[2], input.shape()[3]}), loss_prog);
-  popops::minInPlace(g, train_loss, input.slice({0, n_his, 0, 0}, {input.shape()[0], n_his+1, input.shape()[2], input.shape()[3]}), loss_prog);
+  popops::minInPlace(g, copy_loss , input.slice({0, args.n_his, 0, 0}, {input.shape()[0], args.n_his+1, input.shape()[2], input.shape()[3]}), loss_prog);
+  popops::minInPlace(g, train_loss, input.slice({0, args.n_his, 0, 0}, {input.shape()[0], args.n_his+1, input.shape()[2], input.shape()[3]}), loss_prog);
 
   // L2 Loss:
   popops::squareInPlace(g, copy_loss, loss_prog);
@@ -92,12 +95,16 @@ Sequence build_model(Tensor &input, size_t n_his, size_t Ks, size_t Kt, size_t b
   popops::divInPlace(g, copy_loss,  two, loss_prog);
   popops::divInPlace(g, train_loss, two, loss_prog);
 
-  // model.add(Copy(y.slice({0, 0, 0, 0}, {y.shape()[0], 1, y.shape()[2], y.shape()[3]}), single_pred));
+  loss_prog.add(Copy(train_loss, y));
 
-  // VERIFIVICATION
-  verification_pass(ipu, g, y, "STGCN_OUT", model);
+  Sequence bwd_pass(loss_prog);
+  for (int elem = bwd.size() - 1; elem>=0; elem--) {
+    bwd_pass.add(bwd[elem]);
+  }
 
-  //model.add(loss_prog);
+  bwd_pass.add(loss_prog);
 
-  return model;
+  return tuple<Program, Program, Tensor>(model, bwd_pass, y);
+  // return pair<Program, Program>(model, bwd_pass);
+  // return model;
 }
